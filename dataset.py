@@ -216,6 +216,7 @@ class KaggleDataset(Dataset):
 
         if train_test_split:
             train_indices, val_indices, test_indices = self.read_test_train_split()
+            train_indices, val_indices, test_indices = list(map(lambda l : list(filter(lambda x: (x < max_index) and (x >= min_index), l)), [train_indices, val_indices, test_indices]))
             X_train, X_val, X_test = X[train_indices], X[val_indices], X[test_indices]
             Y_train, Y_val, Y_test = X[train_indices], X[val_indices], X[test_indices]
 
@@ -251,9 +252,9 @@ class KaggleDataset(Dataset):
 
 if __name__ == "__main__":
 
-    path = os.path.join("data", "300W", "02_Outdoor")
-    dataset = iBug300WDataset(path)
-    dataset.create_train_test_split()
+    # path = os.path.join("data", "300W", "02_Outdoor")
+    # dataset = iBug300WDataset(path)
+    # dataset.create_train_test_split()
     # _, img, landmark = dataset[66]
     # fig = dataset.matplotlib_visualize_landmark(img, landmark)
     # bbox = dataset.create_bbox(landmark)
@@ -268,7 +269,7 @@ if __name__ == "__main__":
 
     path = os.path.join("data", "Kaggle")
     dataset = KaggleDataset(path)
-    X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load()
+    X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load(max_index=100)
     dataset.matplotlib_visualize_landmark(X_train[0], Y_train[0])
 
 
