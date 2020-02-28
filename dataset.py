@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import pandas as pd
 
+np.random.seed(0)
+
 class Dataset:
 
     def __init__(self, path, img_extension):
@@ -21,9 +23,17 @@ class Dataset:
         """
         return None, None
 
+    def read_test_train_split(self):
+        with open(self.path + "/indices.txt", "r") as f:
+            lines = f.readlines()
+            indices = [[int(x) for x in line.rstrip().split(":")[1].split(",")] for line in lines]
+            return indices
+
 
 class iBug300WDataset(Dataset):
-
+    """
+    https://ibug.doc.ic.ac.uk/download/300VW_Dataset_2015_12_14.zip/
+    """
     def __init__(self, path, img_extension="png"):
         super().__init__(path, img_extension)
         self._retrieve_index()
@@ -75,12 +85,19 @@ class iBug300WDataset(Dataset):
             images.append(self.load_image(index, convert_color=True))
         return np.array(images)
 
-    def load(self):
+    def load(self, train_test_split=True):
         X, Y = self.load_images(), self.load_landmarks()
-        return X, Y
+        if train_test_split:
+            train_indices, val_indices, test_indices = self.read_test_train_split()
+            X_train, X_val, X_test = X[train_indices], X[val_indices], X[test_indices]
+            Y_train, Y_val, Y_test = X[train_indices], X[val_indices], X[test_indices]
+
+            return X_train, X_val, X_test, Y_train, Y_val, Y_test
+        else:
+            return X, Y
 
 
-    def load_cropped(self):
+    def load_cropped(self, train_test_split=True):
         images = []
         landmarks = []
         for index in self.indexes:
@@ -89,7 +106,15 @@ class iBug300WDataset(Dataset):
             bbox = self.create_bbox(lm)
             images.append(self.crop_w_bbox(im, bbox))
             landmarks.append(self.translate_landmark(lm, bbox))
-        return np.array(images), np.array(landmarks)
+        X, Y =  np.array(images), np.array(landmarks)
+        if train_test_split:
+            train_indices, val_indices, test_indices = self.read_test_train_split()
+            X_train, X_val, X_test = X[train_indices], X[val_indices], X[test_indices]
+            Y_train, Y_val, Y_test = X[train_indices], X[val_indices], X[test_indices]
+
+            return X_train, X_val, X_test, Y_train, Y_val, Y_test
+        else:
+            return X, Y
 
     def load_landmark(self, index: str) -> np.array:
         with open(os.path.join(self.path, index + '.pts'), "r") as f:
@@ -107,6 +132,19 @@ class iBug300WDataset(Dataset):
         for index in self.indexes:
             landmarks.append(self.load_landmark(index))
         return np.array(landmarks)
+
+    def create_train_test_split(self):
+        # Get number of indexes
+        indices = np.arange(self.len)
+        np.random.shuffle(indices)
+        train_indices, val_indices, test_indices = np.split(indices, [int(self.len*.6), int(self.len*.8)])
+
+        with open(self.path + "/indices.txt", "w") as f:
+            train_str = "train_index:" + ",".join([str(x) for x in sorted(train_indices)]) + "\n"
+            val_str = "val_index:" + ",".join([str(x) for x in sorted(val_indices)]) + "\n"
+            test_str = "test_index:" + ",".join([str(x) for x in sorted(test_indices)]) + "\n"
+            out_str = train_str + val_str + test_str
+            f.write(out_str)
 
     @staticmethod
     def matplotlib_visualize_landmark(img, landmark, size=5, is_rgb=True):
@@ -148,7 +186,9 @@ class iBug300WDataset(Dataset):
         return landmark - np.array([xmin, ymin])
 
 class KaggleDataset(Dataset):
-
+    """
+    https://www.kaggle.com/drgilermo/face-images-with-marked-landmark-points#__sid=js0
+    """
     def __init__(self, path, img_extension="png"):
         super().__init__(path, img_extension)
 
@@ -165,16 +205,39 @@ class KaggleDataset(Dataset):
         img = np.load(os.path.join(self.path, "face_images.npz"))['face_images'][:, :, min_index:max_index]
         return img
 
-    def load(self, min_index=0, max_index=10000, mask_missing_points=True):
+    def load(self, min_index=0, max_index=10000, mask_missing_points=True, train_test_split=True):
         if mask_missing_points:
             Y, mask = self.load_landmarks(min_index, max_index, mask_missing_points)
             X =  self.load_images(min_index, max_index)[:, :, mask[min_index:max_index]]
             X = np.rollaxis(X, -1) # Reshapinig at N x W x H
-            return X, Y
         else:
             X, Y = self.load_images(min_index, max_index), self.load_landmarks(min_index, max_index)
             X = np.rollaxis(X, -1)
+
+        if train_test_split:
+            train_indices, val_indices, test_indices = self.read_test_train_split()
+            X_train, X_val, X_test = X[train_indices], X[val_indices], X[test_indices]
+            Y_train, Y_val, Y_test = X[train_indices], X[val_indices], X[test_indices]
+
+            return X_train, X_val, X_test, Y_train, Y_val, Y_test
+
+        else:
             return X, Y
+
+    def create_train_test_split(self):
+        # Get number of indexes
+        _, mask = self.load_landmarks(mask_missing_points=True)
+        len_ = sum(mask)
+        indices = np.arange(len_)
+        np.random.shuffle(indices)
+        train_indices, val_indices, test_indices = np.split(indices, [int(len_*.6), int(len_*.8)])
+
+        with open(self.path + "/indices.txt", "w") as f:
+            train_str = "train_index:" + ",".join([str(x) for x in sorted(train_indices)]) + "\n"
+            val_str = "val_index:" + ",".join([str(x) for x in sorted(val_indices)]) + "\n"
+            test_str = "test_index:" + ",".join([str(x) for x in sorted(test_indices)]) + "\n"
+            out_str = train_str + val_str + test_str
+            f.write(out_str)
 
     @staticmethod
     def matplotlib_visualize_landmark(img, landmark):
@@ -188,22 +251,25 @@ class KaggleDataset(Dataset):
 
 if __name__ == "__main__":
 
-    # path = os.path.join("data", "300W", "01_Indoor")
-    # dataset = iBug300WDataset(path)
+    path = os.path.join("data", "300W", "02_Outdoor")
+    dataset = iBug300WDataset(path)
+    dataset.create_train_test_split()
     # _, img, landmark = dataset[66]
     # fig = dataset.matplotlib_visualize_landmark(img, landmark)
     # bbox = dataset.create_bbox(landmark)
     # fig = dataset.matplotlib_visualize_bbox(img, bbox)
     # plt.show()
-    # X, Y = dataset.load()
-    # X_aligned, Y_aligned = dataset.load_cropped()
+    # X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load()
+    # X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load_cropped()
     # img_croppped = dataset.crop_w_bbox(img, bbox)
     # landmark_cropped = dataset.translate_landmark(landmark, bbox)
+    # fig = dataset.matplotlib_visualize_landmark(img_croppped, landmark_cropped)
+    # plt.show()
 
     path = os.path.join("data", "Kaggle")
     dataset = KaggleDataset(path)
-    X, Y = dataset.load()
-    dataset.matplotlib_visualize_landmark(X[0], Y[0])
+    X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load()
+    dataset.matplotlib_visualize_landmark(X_train[0], Y_train[0])
 
 
 
