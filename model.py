@@ -12,17 +12,29 @@ class BaseDetector:
     def predict(self, X):
         pass
 
+    def load(self):
+        pass
+
+    def save(self):
+        pass
+
 class ASM(BaseDetector):
 
-    def __init__(self):
+    def __init__(self, modes=20):
         super(ASM, self).__init__()
         self.deformable_model = None
+        self.modes = modes
+        self.Xt, self.Yt = None, None # Translation param
+        self.s = None # Scale param
+        self.theta = None  # Pose param
+
+
+        self.sm_means, self.sm_inv_covs = None, None
+
 
     def fit(self, X, Y):
 
-        self.build_model(Y, pca_components=20)
-
-
+        self.build_model(Y, pca_components=self.modes)
 
     def build_model(self, Y, pca_components=None):
         if pca_components:
@@ -36,14 +48,19 @@ class ASM(BaseDetector):
         else:
             raise NotImplementedError
 
-    def generate_lm(self, mode=0):
+    def generate_lm(self, mode=0, scale=10):
         assert self.deformable_model is not None, "You must build the model first"
-        limit = np.sqrt(3)*self.dm_vp[mode]/100
+        limit = np.sqrt(3)*self.dm_vp[mode]/scale
         dm = self.deformable_model.copy()
         delta = np.random.uniform(-limit, limit)
         dm[mode] += delta
         lm = dm @ self.P + self.mean_
         return lm.reshape((-1, 2))
+
+    def mahalanobis_dist(self, g, i):
+        assert g.ndim == 1, "Must flatten neighbourhood before computing distance"
+        dist = (g - self.sm_means[i]).T @ self.sm_inv_covs[i] @ (g - self.sm_means[i])
+        return dist
 
     def fit_fn(self):
         pass
@@ -52,3 +69,113 @@ class ASM(BaseDetector):
         lm = self.generate_lm()
         # TODO: iteratively update fit function
         return np.array([lm for _ in X])
+
+    @staticmethod
+    def T(Xt, Yt, s, theta, x: np.array) -> np.array:
+        assert x.ndim == 2, "Reshape to landmark (n_lm, 2) before transforming"
+        """
+        Applies translation - rotation - scale to a model instance. Convention : capital letter : image coordinate, lower case : object-aligned coordinates
+        :param Xt: float, trans x
+        :param Yt: float, trans y
+        :param s: float, scale
+        :param theta: float, pose
+        :param x: np.array : (lm_size, 2)
+        :return: np.array: (lm_size, 2)
+        """
+
+        t = np.array([[Xt, Yt]])
+        R = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+        Y = t + s * x @ R
+        return Y
+
+    @staticmethod
+    def T_inv(Xt, Yt, s, theta, Y: np.array) -> np.array:
+        assert Y.ndim == 2, "Reshape to landmark (n_lm, 2) before transforming"
+        """
+        Invert of T
+        """
+        t = np.array([Xt, Yt])
+        R = np.array([[np.cos(theta), np.sin(theta)], [-np.sin(theta), np.cos(theta)]])
+        x = (Y - t)/s @ R
+        return x
+
+    @staticmethod
+    def get_pose_parameters(x, y):
+        assert x.ndim == 2, "Reshape to landmark (n_lm, 2) before transforming"
+        assert y.ndim == 2, "Reshape to landmark (n_lm, 2) before transforming"
+        """
+        Compute best matching pose parameters matching model x to target points y
+        :return tuple : (Xt, Yt, s, theta)
+        """
+        return 0, 0, 1, 0
+
+    def match_model_to_target_points(self, Y, max_it=10, eps=1e-3): # Protocol 1, page 9 (https://pdfs.semanticscholar.org/ebc2/ceba03a0f561dd2ab27c97b641c649c48a14.pdf)
+        # Initialize model
+        b = np.zeros((self.modes,))
+
+        # Main loop
+        converge, it = False, 0
+        while not converge and it < max_it:
+            it += 1
+            x = self.mean_ + b @ self.P
+            x_reshaped, Y_reshaped = x.reshape((-1, 2)), Y.reshape((-1, 2))
+            Xt, Yt, s, theta = self.get_pose_parameters(x_reshaped, Y_reshaped)
+            y = self.T_inv(Xt, Yt, s, theta, Y_reshaped) # Project Y into the model co-ordinate frame
+            y = y.reshape((-1,))
+            # y = y / (y @ self.mean_) # Project y into the tangent plane to x ̄ by scaling #TODO : Seems unappropriate.
+            b_ = self.P @ (y - self.mean_) # Update the model parameters to match to y′
+
+            if np.abs(b - b_).sum() < eps:
+                converge=True
+            b = b_.copy()
+        return b, converge, it
+
+def test_T_fn(model):
+    def T_T_inv_test(model):
+        x = model.generate_lm()
+        Y = model.T(1, 1, 2, np.pi / 2, x)
+        X = model.T_inv(1, 1, 2, np.pi / 2, Y)
+        return ~np.any(X-x)
+
+    def T_id(model):
+        x = model.generate_lm()
+        y = model.T(0, 0, 1, 0, x)
+        return ~np.any(y - x)
+
+    def Tinv_id(model):
+        x = model.generate_lm()
+        y = model.T_inv(0, 0, 1, 0, x)
+        return ~np.any(y - x)
+
+    assert T_T_inv_test(model)
+    assert T_id(model)
+    assert Tinv_id(model)
+
+def test_matching_model(model):
+    b, cv, it = model.match_model_to_target_points(model.mean_)
+    assert it==1, "Inputing normalized mean_ of model should return a null shape"
+
+
+if __name__ == "__main__":
+
+    import os
+    from dataset import KaggleDataset
+    path = os.path.join("data", "Kaggle")
+    dataset = KaggleDataset(path)
+    X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load(max_index=100)
+    model = ASM()
+    model.fit(X_train, Y_train)
+
+    test_T_fn(model)
+    test_matching_model(model)
+    print(".")
+
+    x = model.mean_ + np.random.uniform(-5, 5, size=(model.mean_.shape))
+    model.match_model_to_target_points(x)
+
+    import matplotlib.pyplot as plt
+    for i,s in enumerate([10, 10, 10, 10, 100, 100, 1000, 1000]):
+        dataset.matplotlib_visualize_landmark(X_train[0], x.reshape((-1, 2)))
+    plt.show()
+
+

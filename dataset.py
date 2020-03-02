@@ -216,9 +216,9 @@ class KaggleDataset(Dataset):
 
         if train_test_split:
             train_indices, val_indices, test_indices = self.read_test_train_split()
-            train_indices, val_indices, test_indices = list(map(lambda l : list(filter(lambda x: (x < max_index) and (x >= min_index), l)), [train_indices, val_indices, test_indices]))
+            train_indices, val_indices, test_indices = list(map(lambda l : list(filter(lambda x: (x < min(max_index, X.shape[0])) and (x >= min_index), l)), [train_indices, val_indices, test_indices]))
             X_train, X_val, X_test = X[train_indices], X[val_indices], X[test_indices]
-            Y_train, Y_val, Y_test = X[train_indices], X[val_indices], X[test_indices]
+            Y_train, Y_val, Y_test = Y[train_indices], Y[val_indices], Y[test_indices]
 
             return X_train, X_val, X_test, Y_train, Y_val, Y_test
 
@@ -274,3 +274,4 @@ if __name__ == "__main__":
 
 
 
+lm_links = [()]
