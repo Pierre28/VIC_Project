@@ -22,17 +22,17 @@ class DatasetUtils:
         pass
 
 
-    def transform_img_with_respect_to_stat(self, strategy):
+    def transform_img_with_respect_to_strat(self, data, strategy):
         if strategy is None:
-            X = self.X
+            X = data
         else:
-            X = self.apply_filter(self.X, strategy)
+            X = self.apply_filter(data, strategy)
         return X
 
 
     def create_lm_stat_model(self, k, strategy=None):
         self.k = k
-        X = self.transform_img_with_respect_to_stat(strategy)
+        X = self.transform_img_with_respect_to_strat(self.X, strategy)
         stat_model = []
         for i in range(self.Y.shape[1]):
             stat_model.append(self.create_point_stat_model(points=self.Y[:, i, :], k=k, images=X))
@@ -69,15 +69,16 @@ class KaggleDatasetUtils(DatasetUtils):
         directions around a point.
         """
         print("Make sure sampling is performed using same strategy as training.")
+        assert self.k, "First build statistical model"
         assert m > self.k
-        center = self.get_neighbourhood(img, x, y, self.k)
+        center = self.get_neighbourhood(img, int(x), int(y), self.k)
         center /= np.linalg.norm(center)
-        candidates = [center]
+        candidates = [(x, y, center)]
         for i in range(1, m-self.k+1):
             for u, v in [(x+i, y), (x-i, y), (x, y+i), (x, y-i), (x+i, y+i), (x-i, y+i), (x+i, y-i), (x-i, y-i)]:
-                candidate = self.get_neighbourhood(img, u, v, self.k)
+                candidate = self.get_neighbourhood(img, int(u), int(v), self.k)
                 candidate /= np.linalg.norm(candidate)
-                candidates.append(candidate)
+                candidates.append((u, v, candidate))
         return candidates
 
     def get_neighbourhood(self, img, x, y, k):
@@ -131,26 +132,33 @@ def plot_point_stat_model(stat_model, ids, names):
     for i, (name, id) in enumerate(zip(names, ids)):
         plt.subplot(2, 2, i+1)
         mean, _ = stat_model[id]
-        plt.imshow(mean.reshape((2*k+1, 2*k+1)))
+        plt.imshow(mean.reshape((2*k+1, 2*k+1)), cmap="gray")
         plt.title(f"{name}")
     plt.show()
     return fig
 
 
-def check_sample_around_point(img, lm, id, name, samples, model, random=False):
+def check_sample_around_point(img, lm, id, name, samples, model, random=False, sorted_=False, dist="mah"):
     fig = plt.figure()
     plt.subplot(3, 3, 1)
     x, y = lm[id]
-    plt.imshow(img, cmap="gray")
-    plt.scatter([x], [y])
+    # plt.imshow(img, cmap="gray")
+    # plt.scatter([x], [y])
+    reshape_size = int(np.sqrt(model.sm_means[id].shape[0]))
+    plt.imshow(model.sm_means[id].reshape((reshape_size, reshape_size)), cmap="gray")
     plt.title(f"{name}")
     if random: np.random.shuffle(samples)
-    for i, sample in enumerate(samples[-8:]):
+    dist_fn = model.mahalanobis_dist if dist == "mah" else model.euclidean_distance
+    if sorted_:
+        sorted_index = np.argsort([dist_fn(sample.reshape((-1,)), id) for u, v, sample in samples])
+        samples = np.array(samples)[sorted_index]
+    for i, (u, v, sample) in enumerate(samples[-8:]):
         plt.subplot(3, 3, i+2)
         plt.imshow(sample, cmap="gray")
-        dist = model.mahalanobis_dist(sample.reshape((-1,)), id)
-        mse = np.linalg.norm(model.sm_means[id] - sample.reshape((-1,)))
-        plt.title("D: {:.1e}, mse: {:.1e}".format(dist, mse) )
+        dist = dist_fn(sample.reshape((-1,)), id)
+        plt.title("{}, {}:{:.1e}".format(u, v, dist))
+
+    print("{}, {}".format(x, y))
     plt.show()
     return fig
 
@@ -163,7 +171,7 @@ if __name__ == "__main__":
     X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load(max_index=100)
 
     dataset_util = KaggleDatasetUtils(X_train, Y_train)
-    k, strategy = 5, "Laplacian"
+    k, strategy = 10, "Laplacian"
     stat_model = dataset_util.create_lm_stat_model(k, strategy=strategy)
 
 
@@ -181,8 +189,10 @@ if __name__ == "__main__":
     model = ASM()
     sm_means, sm_inv_covs = dataset_util.format_stat_model(stat_model)
     model.sm_means, model.sm_inv_covs = sm_means, sm_inv_covs
-    X_transformed = dataset_util.transform_img_with_respect_to_stat(strategy=strategy)
+    X_transformed = dataset_util.transform_img_with_respect_to_strat(X_train, strategy=strategy)
     samples = dataset_util.sample_around_point(X_transformed[0], int(Y_train[0][ids[0]][0]), int(Y_train[0][ids[0]][1]), 15)
-    check_sample_around_point(X_train[0], Y_train[0], ids[0], names[0], samples, model, random=True)
+    check_sample_around_point(X_train[0], Y_train[0], ids[0], names[0], samples, model, random=True, sorted_=False, dist="mah")
 
     print('.')
+
+

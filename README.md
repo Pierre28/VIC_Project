@@ -15,19 +15,49 @@ VIC_Project
 
 ```
 
+# Presentation
+
+- Intro
+- Slide Pourquoi ? A quoi ça sert. Quelles application downstream
+- Slide overview (timeline comment on attaque). ASM -> AAM -> DPM 
+- Dig in : ASM (formules)
+- Dig in ASM + SIFT
+- Résultats
+
 
 
 #  Useful info/links
 
 - [Dataset website](https://ibug.doc.ic.ac.uk/resources/300-W/)
     - Note : evaluation pipeline and scripts provided
+- [Mastering OpenCV projects](https://github.com/MasteringOpenCV)
+- [AAM/ASM notebook](https://ibug.doc.ic.ac.uk/media/uploads/notebook.html)
+
 
 # Todo
 
+Now:
+@high
+- Fix Mahalanobis distance
+- Add constrainsts on shape model
+- Investigate low self.deformable_model values
+
+@medium
+- Implement pose estimation
+- Investigate image instance re-sampling from constraint shape model
+
+Future : 
 - Read SIFT-ASM
 - Read / Implement AAM
 - Read DMP
-- Complete ASM implem
+
+
+/!\ 
+- Model b is very small at the moment. And eigenvalue might not make sense. 
+- Matching model to new points is executed in 1 step (because currently no scale/rot applied). Make sure it doesn't when used with those
+
+/!\
+ASM : Mahablabla distance not very good: covariance too small : exploding values. Fix this under dataset_utils : find a good strategy / distance / k s.t gs close to g -> min dist
 
 # Ideas/Notes
 
@@ -84,7 +114,17 @@ Summary :
 5. (4.1.3) Possible to apply PCA on the landmark to reduce model dimension. And generate new landmark by modifying landmark in the PC space, and projecting back, as long as modification are bounding by eigenvalue.
 6. (4.1.4 Fitting model to new points. (Iterative minimisation. Pure geometry).
 7. **Matching model instance to an image**. (4.2.1) Take a model c. Project it to the image (PCA + RT ou juste PCA?), and compute a fit function F(c). Chosen model defined by c_ is c_ = argming F(c). *Thus, in theory all we have to do is to choose a suitable fit function, and use a general purpose optimiser to find the minimum*. Un peu bêbête un effet.
+8. (4.2 - ) Multiple possibility in choosing the fit function. (Minimal distance between a model point and strong edges (sensitive to prior edge detector), similarity in model point neighbourhoods compared to thoses observed in traning set).
+9. (4.2 - ) The requires an optimization strategy to find the best set of parameters (b, Xt, Yt, theta, s). In case no prior information is known on where to find the image, Genetic Algorithm can be used. When some knowledge, use simplex. Otherwise can derive a ASM specific method.(Active shape model)
+9. Sample along profile normal of model points on the training set, build a statistical model of this point. Sample k pixels, put in vector g_i (sample the derivative actually. Not sure if they mean sampling sobel, or derivate the vector itself) + normalize. The set {g_i} models a given point. Assume this is a multivariate gaussian, with mean g_ and covariance Sg. Then use Mahalanobis distance to attest the quality of a fit. Minimizing f(gs) is equivalent to maximizing the probability that gs comes from this distribution. 
+During training, sample a profile of m > k pixels, and create this gs vector for 2(m-k) + 1 and measure the fit function. The best position is chosen as new point xi. Iterating over all possible points, we get a new instance of the model in the image X'. 
+Use algorithm 4.1.4 to compute new shape, pose/scale parameters for the new instance X'.
 
+Note : how to choose the number of modes (pca dimension ?)
+- Explained variance criterion
+- Reach enough accuracy to any face in the dataset. 
+
+Q. Is b a fuking vector or a matrix? 
 **STOP 4.2.2**
 
 -> Model is basically linear combination of landmarks scheme seen during training, projected using PCA. Fiding suitable model means finding the one minimizing a handcrafted specific fit function, that, in essence, will make sure landmark are located at edges or corners.

@@ -1,5 +1,6 @@
 from sklearn.decomposition import PCA
 import numpy as np
+from utils import pointwise_euclidean_distance
 
 class BaseDetector:
 
@@ -62,6 +63,11 @@ class ASM(BaseDetector):
         dist = (g - self.sm_means[i]).T @ self.sm_inv_covs[i] @ (g - self.sm_means[i])
         return dist
 
+    def euclidean_distance(self, g, i):
+        dist = (g - self.sm_means[i]).T @ np.eye(self.sm_inv_covs[i].shape[0]) @ (g - self.sm_means[i])
+        return dist
+
+
     def fit_fn(self):
         pass
 
@@ -100,7 +106,7 @@ class ASM(BaseDetector):
         return x
 
     @staticmethod
-    def get_pose_parameters(x, y):
+    def get_pose_parameters(x, y): # TODO : complete
         assert x.ndim == 2, "Reshape to landmark (n_lm, 2) before transforming"
         assert y.ndim == 2, "Reshape to landmark (n_lm, 2) before transforming"
         """
@@ -112,7 +118,7 @@ class ASM(BaseDetector):
     def match_model_to_target_points(self, Y, max_it=10, eps=1e-3): # Protocol 1, page 9 (https://pdfs.semanticscholar.org/ebc2/ceba03a0f561dd2ab27c97b641c649c48a14.pdf)
         # Initialize model
         b = np.zeros((self.modes,))
-
+        Xt, Yt, s, theta = None, None, None, None
         # Main loop
         converge, it = False, 0
         while not converge and it < max_it:
@@ -128,7 +134,43 @@ class ASM(BaseDetector):
             if np.abs(b - b_).sum() < eps:
                 converge=True
             b = b_.copy()
-        return b, converge, it
+        return b, Xt, Yt, s, theta, converge, it
+
+    def apply_constraints(self, b, Xt, Yt, s, theta): #TODO : complete
+        return b, Xt, Yt, s, theta
+
+
+    def asm_algo(self, dataset_processor, img, m, max_it=10, eps=1, dist="mah"):
+
+        X  = (self.mean_ + self.deformable_model @ self.P).reshape((-1, 2))
+        X_ = np.zeros_like(X)
+
+        dist_fn = self.euclidean_distance if dist == "mse" else self.mahalanobis_dist
+        converge, it = False, 0
+        while not converge and it < max_it:
+            it += 1
+            for i, (x, y) in enumerate(X):
+                candidates = dataset_processor.sample_around_point(img, x, y, m)
+                u_, v_, min_dist = None, None, np.inf
+                for u, v, candidate in candidates:
+                    dist = dist_fn(candidate.reshape((-1,)), i)
+                    if dist < min_dist:
+                        min_dist = dist
+                        u_, v_ = u, v
+                X_[i] = [u_, v_]
+            b, Xt, Yt, s, theta, *_ = self.match_model_to_target_points(X_)
+
+            # Apply constraints on b, Xt, Yt, s, theta
+            b, Xt, Yt, s, theta = self.apply_constraints(b, Xt, Yt, s, theta)
+
+            # TODO: Shouldn't X_ be generated using b contraint ?
+
+            if np.linalg.norm(X - X_) < eps:
+                converge = True
+            X = X_.copy()
+
+        return X, b, Xt, Yt, s, theta
+
 
 def test_T_fn(model):
     def T_T_inv_test(model):
@@ -152,7 +194,7 @@ def test_T_fn(model):
     assert Tinv_id(model)
 
 def test_matching_model(model):
-    b, cv, it = model.match_model_to_target_points(model.mean_)
+    b, Xt, Yt, s, theta, cv, it = model.match_model_to_target_points(model.mean_)
     assert it==1, "Inputing normalized mean_ of model should return a null shape"
 
 
@@ -168,14 +210,39 @@ if __name__ == "__main__":
 
     test_T_fn(model)
     test_matching_model(model)
-    print(".")
 
-    x = model.mean_ + np.random.uniform(-5, 5, size=(model.mean_.shape))
-    model.match_model_to_target_points(x)
+    from dataset_utils import KaggleDatasetUtils
+    dataset_processor = KaggleDatasetUtils(X_train, Y_train)
+    strategy, dist, k = "all_dir", "mse", 10
+    lm_stat_model = dataset_processor.create_lm_stat_model(k=k, strategy=strategy)
+    sm_means, sm_inv_covs = dataset_processor.format_stat_model(lm_stat_model)
+
+    model.sm_means, model.sm_inv_covs = sm_means, sm_inv_covs
+
 
     import matplotlib.pyplot as plt
-    for i,s in enumerate([10, 10, 10, 10, 100, 100, 1000, 1000]):
-        dataset.matplotlib_visualize_landmark(X_train[0], x.reshape((-1, 2)))
-    plt.show()
+    img, lm = X_test[3], Y_test[3]
+    def display_lm(img, lm, lm_gt=None, legend=False):
+        plt.imshow(img, cmap="gray")
+        plt.scatter(lm[:, 0], lm[:,1], c="r", label="pred")
+        if lm_gt is not None :
+            plt.scatter(lm_gt[:, 0], lm_gt[:, 1], c="g", label="gt")
+            plt.title("PED : {}".format(pointwise_euclidean_distance(lm, lm_gt)))
+        if legend: plt.legend()
+        plt.show()
+
+    def display_candidate(cand):
+        plt.imshow(cand, cmap="gray")
+        plt.show()
 
 
+    im_id = 15
+    X_test_filtered = dataset_processor.transform_img_with_respect_to_strat(X_test, strategy=strategy)
+    X_, b, Xt, Yt, s, theta = model.asm_algo(dataset_processor, X_test_filtered[im_id], 15, 10, dist=dist)
+
+    # Before fitting :
+    X = (model.mean_ + model.deformable_model @ model.P).reshape((-1, 2))
+    display_lm(X_test_filtered[im_id], X, Y_test[im_id], legend=True)
+
+    # After fitting :
+    display_lm(X_test_filtered[im_id], X_, Y_test[im_id], legend=True)
