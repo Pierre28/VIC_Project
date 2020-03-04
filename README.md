@@ -37,17 +37,20 @@ VIC_Project
 # Todo
 
 Now:
+
 @high
 - Fix Mahalanobis distance
-- Add constrainsts on shape model
-- Investigate low self.deformable_model values
+
 
 @medium
 - Implement pose estimation
-- Investigate image instance re-sampling from constraint shape model
+
+@low
+- Automatically select the number of modes to keep when performing ACP
+- Align set to common co-ordinate frames
+
 
 Future : 
-- Read SIFT-ASM
 - Read / Implement AAM
 - Read DMP
 
@@ -96,6 +99,11 @@ Q. Understand Pt-Pt evaluation results Plots
 ## [Multiview ASM]((http://www.milbo.org/stasm-files/multiview-active-shape-models-with-sift-for-300w.pdf))
 
 - [ASM-SIFT for template matching](http://www.milbo.org/stasm-files/active-shape-models-with-sift-and-mars.pdf)(same authors)
+
+- Parameters : 
+    - 15x15 patches
+    - 8 bins
+    - 4x5 histograms
 
 
 # Active shape model

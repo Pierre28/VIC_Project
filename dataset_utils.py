@@ -1,6 +1,6 @@
 import numpy as np
 import cv2
-
+from numpy_sift import SIFTDescriptor
 
 class DatasetUtils:
 
@@ -8,35 +8,19 @@ class DatasetUtils:
         self.dataset_name = dataset_name
         self.X = X
         self.Y = Y
-        self.H, self.W = self.X[0].shape
+        self.H, self.W, *_ = self.X[0].shape
 
-    def sample_around_point(self, img, x, y, m):
-        assert m > self.k
-        pass
-
-    def create_point_stat_model(self, points, k, images):
-        """
-        Creates a vector representation of the point using its neighbourhood.
-        :return:
-        """
-        pass
-
-
-    def transform_img_with_respect_to_strat(self, data, strategy):
-        if strategy is None:
-            X = data
-        else:
-            X = self.apply_filter(data, strategy)
-        return X
-
-
-    def create_lm_stat_model(self, k, strategy=None):
+    def create_lm_stat_model(self, k, strategy=None, descriptor = None):
+        self.SD = SIFTDescriptor(patchSize=2*k+1)
         self.k = k
         X = self.transform_img_with_respect_to_strat(self.X, strategy)
         stat_model = []
         for i in range(self.Y.shape[1]):
-            stat_model.append(self.create_point_stat_model(points=self.Y[:, i, :], k=k, images=X))
+            stat_model.append(self.create_point_stat_model(points=self.Y[:, i, :], k=k, images=X, descriptor=descriptor))
         return stat_model
+
+    def transform_img_with_respect_to_strat(self, data, strategy):
+        pass
 
     @staticmethod
     def apply_filter(images: np.array, strategy):
@@ -57,18 +41,12 @@ class DatasetUtils:
             out.append(filtered)
         return out
 
-
-class KaggleDatasetUtils(DatasetUtils):
-    
-    def __init__(self, X, Y):
-        super(KaggleDatasetUtils, self).__init__(dataset_name="Kaggle", X=X, Y=Y)
-
     def sample_around_point(self, img, x, y, m):
         """
         Since normal of point is not possible in Kaggle dataset, (landmark being too sparse), we simply sample in eight
         directions around a point.
         """
-        print("Make sure sampling is performed using same strategy as training.")
+        # print("Make sure sampling is performed using same strategy as training.")
         assert self.k, "First build statistical model"
         assert m > self.k
         center = self.get_neighbourhood(img, int(x), int(y), self.k)
@@ -87,14 +65,18 @@ class KaggleDatasetUtils(DatasetUtils):
         out[-min(0, y-k): 2*k+1 - max(0, y+k+1 -self.W), -min(0, x-k):2*k+1 - max(0, x+k+1-self.H)] = ngh
         return out
 
-    def create_point_stat_model(self, points, k, images):
+    def create_point_stat_model(self, points, k, images, descriptor=None):
 
         point_model = []
         for index, img in enumerate(images):
             x, y = points[index]
             g = self.get_neighbourhood(img, int(x), int(y), k)
-            g = g/np.linalg.norm(g)
-            point_model.append(g.reshape((-1, )))
+            if descriptor == "sift":
+                g = self.SD.describe(g)
+            else:
+                g = g/np.linalg.norm(g)
+                g = g.reshape((-1, ))
+            point_model.append(g)
 
         mean = np.mean(point_model, axis=0)
         cov = np.cov(np.array(point_model).T)
@@ -113,6 +95,30 @@ class KaggleDatasetUtils(DatasetUtils):
             means.append(m)
             invs.append(np.linalg.inv(c))
         return means, invs
+
+class iBug300DatasetUtils(DatasetUtils):
+    def __init__(self, X, Y):
+        super(iBug300DatasetUtils, self).__init__(dataset_name="300W", X=X, Y=Y)
+
+    def transform_img_with_respect_to_strat(self, data, strategy):
+        X = np.array([cv2.cvtColor(x, cv2.COLOR_RGB2GRAY) for x in data])
+        if strategy is None:
+            pass
+        else:
+            X = self.apply_filter(X, strategy)
+        return X
+
+class KaggleDatasetUtils(DatasetUtils):
+    
+    def __init__(self, X, Y):
+        super(KaggleDatasetUtils, self).__init__(dataset_name="Kaggle", X=X, Y=Y)
+
+    def transform_img_with_respect_to_strat(self, data, strategy):
+        if strategy is None:
+            X = data
+        else:
+            X = self.apply_filter(data, strategy)
+        return X
 
 def plot_unique_landmark(img, lm, ids, names):
     fig = plt.figure()
@@ -165,15 +171,17 @@ def check_sample_around_point(img, lm, id, name, samples, model, random=False, s
 if __name__ == "__main__":
 
     import os
-    from dataset import KaggleDataset
-    path = os.path.join("data", "Kaggle")
-    dataset = KaggleDataset(path)
-    X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load(max_index=100)
+    from dataset import KaggleDataset, iBug300WDataset
+    dataset_name = "300W" #"Kaggle"
+    path = os.path.join("data", dataset_name, "01_Indoor")
+    dataset = iBug300WDataset(path)#KaggleDataset(path)
+    X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load_cropped()
 
     dataset_util = KaggleDatasetUtils(X_train, Y_train)
     k, strategy = 10, "Laplacian"
     stat_model = dataset_util.create_lm_stat_model(k, strategy=strategy)
 
+    iBug_utils = iBug300DatasetUtils(X_train, Y_train)
 
     # Display stat models for different points :
     left_eye_corner_index, bottom_mouth_tip_index, nose_index, center_right_eye_index = 3, 13, 10, 1

@@ -2,3 +2,4 @@ opencv
 numpy
 matplotlib
 scikit-learn
+tqdm

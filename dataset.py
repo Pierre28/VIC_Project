@@ -97,24 +97,69 @@ class iBug300WDataset(Dataset):
             return X, Y
 
 
-    def load_cropped(self, train_test_split=True):
+    def load_cropped(self, offset=15, train_test_split=True):
         images = []
         landmarks = []
         for index in self.indexes:
             im = self.load_image(index, convert_color=True)
             lm = self.load_landmark(index)
             bbox = self.create_bbox(lm)
-            images.append(self.crop_w_bbox(im, bbox))
-            landmarks.append(self.translate_landmark(lm, bbox))
+            images.append(self.crop_w_bbox(im, bbox, offset))
+            landmarks.append(self.translate_landmark(lm, bbox, offset))
         X, Y =  np.array(images), np.array(landmarks)
         if train_test_split:
             train_indices, val_indices, test_indices = self.read_test_train_split()
             X_train, X_val, X_test = X[train_indices], X[val_indices], X[test_indices]
-            Y_train, Y_val, Y_test = X[train_indices], X[val_indices], X[test_indices]
+            Y_train, Y_val, Y_test = Y[train_indices], Y[val_indices], Y[test_indices]
 
             return X_train, X_val, X_test, Y_train, Y_val, Y_test
         else:
             return X, Y
+
+    @staticmethod
+    def resize(img, size):
+        img_ = cv2.resize(img, dsize=size)
+        return img_
+
+    @staticmethod
+    def rescale_lm(lm, xscale, yscale):
+        lm_ = np.zeros_like(lm)
+        for i, (x, y) in enumerate(lm):
+            lm_[i] = [x*yscale, y*xscale]
+        return lm_
+
+    def rescale_set(self, im_set, lm_set, size):
+        out_im, out_lm = [] , []
+        for im, lm in zip(im_set, lm_set):
+            try :
+                h, w, *_ = im.shape
+                s_h, s_w = size[0] / h, size[1] / w
+                img = self.resize(im, size=size)
+                lm_ = self.rescale_lm(lm, s_h, s_w)
+                out_im.append(img)
+                out_lm.append(lm_)
+            except:
+                pass
+        return [np.array(out_im), np.array(out_lm)]
+
+    def load_cropped_resized(self, offset=15, size=(128, 128), train_test_split=True):
+        if train_test_split:
+            X_train, X_val, X_test, Y_train, Y_val, Y_test = self.load_cropped(offset=offset)
+            rescale_im_sets, rescale_lm_sets = [], []
+            for sets in [(X_train, Y_train), (X_val, Y_val), (X_test, Y_test)]:
+
+                im_set, lm_set = self.rescale_set(sets[0], sets[1], size)
+                rescale_im_sets.append(im_set)
+                rescale_lm_sets.append(lm_set)
+
+            X_train, X_val, X_test = rescale_im_sets
+            Y_train, Y_val, Y_test = rescale_lm_sets
+            return X_train, X_val, X_test, Y_train, Y_val, Y_test
+
+        else:
+            X, Y = self.load_cropped(offset=offset)
+            raise NotImplementedError
+
 
     def load_landmark(self, index: str) -> np.array:
         with open(os.path.join(self.path, index + '.pts'), "r") as f:
@@ -150,11 +195,9 @@ class iBug300WDataset(Dataset):
     def matplotlib_visualize_landmark(img, landmark, size=5, is_rgb=True):
         if not is_rgb: img_ = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         else: img_ = np.copy(img)
-        for i, (x, y) in enumerate(landmark):
-            x, y = int(x), int(y)
-            img_[y-size:y+size, x-size:x+size, :] = [255, 255, 255]
 
         fig, ax = plt.subplots(1)
+        ax.scatter([x[0] for x in landmark], [x[1] for x in landmark], c="b")
         ax.imshow(img_)
         return fig
 
@@ -175,15 +218,15 @@ class iBug300WDataset(Dataset):
         return fig
 
     @staticmethod
-    def crop_w_bbox(img, bbox):
+    def crop_w_bbox(img, bbox, offset):
         im = img.copy()
         xmin, ymin, xmax, ymax = bbox
-        return im[int(np.floor(ymin)):int(np.ceil(ymax)), int(np.floor(xmin)):int(np.ceil(xmax))]
+        return im[int(np.floor(ymin-offset)):int(np.ceil(ymax+offset)), int(np.floor(xmin-offset)):int(np.ceil(xmax+offset))]
 
     @staticmethod
-    def translate_landmark(landmark, bbox):
+    def translate_landmark(landmark, bbox, offset):
         xmin, ymin, xmax, ymax = bbox
-        return landmark - np.array([xmin, ymin])
+        return landmark - np.array([xmin-offset, ymin-offset])
 
 class KaggleDataset(Dataset):
     """
@@ -249,29 +292,37 @@ class KaggleDataset(Dataset):
         ax.scatter([x[0] for x in landmark], [x[1] for x in landmark], c="b")
         return fig
 
+    @staticmethod
+    def matplotlib_visualize_landmarks(img, landmarks, lm_names):
+        img_ = np.copy(img)
+        fig, ax = plt.subplots(1)
+        ax.imshow(img_, cmap="gray")
+        for landmark, lm_name in zip(landmarks, lm_names):
+            ax.scatter([x[0] for x in landmark], [x[1] for x in landmark], label=lm_name)
+        plt.legend()
+        return fig
 
 if __name__ == "__main__":
 
-    # path = os.path.join("data", "300W", "02_Outdoor")
-    # dataset = iBug300WDataset(path)
-    # dataset.create_train_test_split()
-    # _, img, landmark = dataset[66]
-    # fig = dataset.matplotlib_visualize_landmark(img, landmark)
+    path = os.path.join("data", "300W", "01_Indoor")
+    dataset = iBug300WDataset(path)
+    #dataset.create_train_test_split()
+    #_, img, landmark = dataset[66]
+    #fig = dataset.matplotlib_visualize_landmark(img, landmark)
     # bbox = dataset.create_bbox(landmark)
     # fig = dataset.matplotlib_visualize_bbox(img, bbox)
     # plt.show()
     # X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load()
-    # X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load_cropped()
-    # img_croppped = dataset.crop_w_bbox(img, bbox)
-    # landmark_cropped = dataset.translate_landmark(landmark, bbox)
-    # fig = dataset.matplotlib_visualize_landmark(img_croppped, landmark_cropped)
-    # plt.show()
+    X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load_cropped_resized()
+    img_croppped = X_train[1]
+    landmark_cropped = Y_train[1]
+    fig = dataset.matplotlib_visualize_landmark(img_croppped, landmark_cropped)
+    plt.show()
 
-    path = os.path.join("data", "Kaggle")
-    dataset = KaggleDataset(path)
-    X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load(max_index=100)
-    dataset.matplotlib_visualize_landmark(X_train[0], Y_train[0])
+    # path = os.path.join("data", "Kaggle")
+    # dataset = KaggleDataset(path)
+    # X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load(max_index=100)
+    # dataset.matplotlib_visualize_landmark(X_train[0], Y_train[0])
 
 
 
-lm_links = [()]

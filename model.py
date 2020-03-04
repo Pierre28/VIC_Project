@@ -1,6 +1,8 @@
 from sklearn.decomposition import PCA
 import numpy as np
 from utils import pointwise_euclidean_distance
+from numpy_sift import SIFTDescriptor
+
 
 class BaseDetector:
 
@@ -42,6 +44,7 @@ class ASM(BaseDetector):
             assert pca_components < Y.shape[1]*Y.shape[2]
             pca = PCA(n_components=pca_components)
             self.deformable_model = pca.fit_transform(Y.reshape(Y.shape[0], -1)).mean(axis=0)
+            self.deformable_model_set = pca.transform(Y.reshape(Y.shape[0], -1))
             self.dm_vp = pca.explained_variance_
             self.model_explained_var = sum(pca.explained_variance_ratio_)
             self.P = pca.components_
@@ -51,12 +54,24 @@ class ASM(BaseDetector):
 
     def generate_lm(self, mode=0, scale=10):
         assert self.deformable_model is not None, "You must build the model first"
-        limit = np.sqrt(3)*self.dm_vp[mode]/scale
+        limit = np.sqrt(3)*np.sqrt(self.dm_vp)[mode]/scale
         dm = self.deformable_model.copy()
         delta = np.random.uniform(-limit, limit)
         dm[mode] += delta
         lm = dm @ self.P + self.mean_
         return lm.reshape((-1, 2))
+
+    def create_mode_map(self, mode=0, n=5):
+        assert self.deformable_model is not None, "You must build the model first"
+        limit = np.sqrt(3)*np.sqrt(self.dm_vp)[mode]
+        variations = np.linspace(-limit, +limit, n)
+        lms = []
+        for var in variations:
+            dm = self.deformable_model_set[0].copy()
+            dm[mode] += var
+            lm = dm @ self.P + self.mean_
+            lms.append(lm.reshape((-1, 2)))
+        return lms, variations
 
     def mahalanobis_dist(self, g, i):
         assert g.ndim == 1, "Must flatten neighbourhood before computing distance"
@@ -128,17 +143,68 @@ class ASM(BaseDetector):
             Xt, Yt, s, theta = self.get_pose_parameters(x_reshaped, Y_reshaped)
             y = self.T_inv(Xt, Yt, s, theta, Y_reshaped) # Project Y into the model co-ordinate frame
             y = y.reshape((-1,))
-            # y = y / (y @ self.mean_) # Project y into the tangent plane to x ̄ by scaling #TODO : Seems unappropriate.
+            y = y / (y @ self.mean_) # Project y into the tangent plane to x ̄ by scaling #TODO : Seems unappropriate.
             b_ = self.P @ (y - self.mean_) # Update the model parameters to match to y′
-
+            b_ = self.apply_constraints(b_) # Apply constraints on b
             if np.abs(b - b_).sum() < eps:
                 converge=True
             b = b_.copy()
         return b, Xt, Yt, s, theta, converge, it
 
-    def apply_constraints(self, b, Xt, Yt, s, theta): #TODO : complete
-        return b, Xt, Yt, s, theta
+    def apply_constraints(self, b):
+        limits = 3* np.sqrt(self.dm_vp)
+        b = np.clip(b, -limits, limits)
+        return b
 
+    @staticmethod
+    def sift_transform(patches, patch_size):
+        SD = SIFTDescriptor(patchSize = patch_size)
+        out = []
+        for x, y, patch in patches:
+            patch_ = SD.describe(patch)
+            out.append((x, y, patch_))
+        return out
+
+    def iteration(self, dataset_processor, X, img, m, dist, descriptor, patch_size):
+        X_ = np.zeros_like(X)
+
+        dist_fn = self.euclidean_distance if dist == "mse" else self.mahalanobis_dist
+
+        # Find best candidate around current shape
+        for i, (x, y) in enumerate(X):
+            candidates = dataset_processor.sample_around_point(img, x, y, m)
+            if descriptor=="sift": candidates = self.sift_transform(candidates, patch_size=patch_size)
+            u_, v_, min_dist = None, None, np.inf
+            for u, v, candidate in candidates:
+                dist = dist_fn(candidate.reshape((-1,)), i)
+                if dist < min_dist:
+                    min_dist = dist
+                    u_, v_ = u, v
+            X_[i] = [u_, v_]
+
+        # Align to X_
+        # b = self.P @ X_.reshape((-1, ))
+        # b_ = self.apply_constraints(b)
+        # new_shape = b_ @ self.P
+        diff = X_.reshape((-1, )) - self.mean_
+        new_shape = self.mean_.copy()
+        b = self.P @ diff
+        b_ = self.apply_constraints(b)
+        new_shape += b_ @ self.P
+        return new_shape.reshape((-1, 2))
+
+    def asm(self, dataset_processor, img, m, max_it=10, eps=1, dist="mah", descriptor="sift", patch_size=15):
+
+        X = self.mean_.copy().reshape((-1, 2))
+        converge, it = False, 0
+        while not converge and it < max_it:
+            it += 1
+            X_ = self.iteration(dataset_processor, X, img, m, dist=dist,  descriptor=descriptor, patch_size=patch_size)
+            if np.linalg.norm(X - X_) < eps:
+                converge = True
+            X = X_
+
+        return X
 
     def asm_algo(self, dataset_processor, img, m, max_it=10, eps=1, dist="mah"):
 
@@ -160,10 +226,9 @@ class ASM(BaseDetector):
                 X_[i] = [u_, v_]
             b, Xt, Yt, s, theta, *_ = self.match_model_to_target_points(X_)
 
-            # Apply constraints on b, Xt, Yt, s, theta
-            b, Xt, Yt, s, theta = self.apply_constraints(b, Xt, Yt, s, theta)
-
-            # TODO: Shouldn't X_ be generated using b contraint ?
+            # Generate b
+            x = b @ self.P  # + self.mean_
+            X_ = self.T(Xt, Yt, s, theta, x.reshape((-1, 2)))
 
             if np.linalg.norm(X - X_) < eps:
                 converge = True
@@ -195,8 +260,8 @@ def test_T_fn(model):
 
 def test_matching_model(model):
     b, Xt, Yt, s, theta, cv, it = model.match_model_to_target_points(model.mean_)
-    assert it==1, "Inputing normalized mean_ of model should return a null shape"
-
+    # assert it==1, "Inputing normalized mean_ of model should return a null shape"
+    return
 
 if __name__ == "__main__":
 
@@ -204,7 +269,7 @@ if __name__ == "__main__":
     from dataset import KaggleDataset
     path = os.path.join("data", "Kaggle")
     dataset = KaggleDataset(path)
-    X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load(max_index=100)
+    X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load(max_index=1000)
     model = ASM()
     model.fit(X_train, Y_train)
 
@@ -235,14 +300,49 @@ if __name__ == "__main__":
         plt.imshow(cand, cmap="gray")
         plt.show()
 
+    def draw_mode_variation(img, lms, variations, mode):
+        fig = plt.figure()
+        n = int(np.sqrt(len(lms)))
+        for i, (lm, var) in enumerate(zip(lms[:n**2], variations[:n**2])):
+            plt.subplot(n, n, i+1)
+            plt.imshow(img)
+            plt.scatter(lm[:, 0], lm[:, 1])
+            plt.title("{:.1f}".format(var))
+        plt.title("Mode : {}".format(mode))
+        plt.show()
+        return fig
 
-    im_id = 15
+
+    def draw_mode_variation_single_plot(img, lms, variations, mode):
+        fig = plt.figure()
+        n = int(np.sqrt(len(lms)))
+        plt.subplot(1, 1, 1)
+        plt.imshow(img, cmap="gray")
+        for i, (lm, var) in enumerate(zip(lms[:n ** 2], variations[:n ** 2])):
+            plt.scatter(lm[:, 0], lm[:, 1], label="{:.1f}".format(var))
+        plt.legend()
+        plt.title("Mode : {}".format(mode))
+        plt.show()
+        return fig
+
+
+    im_id = 10
+    before_mean_ = model.mean_
     X_test_filtered = dataset_processor.transform_img_with_respect_to_strat(X_test, strategy=strategy)
-    X_, b, Xt, Yt, s, theta = model.asm_algo(dataset_processor, X_test_filtered[im_id], 15, 10, dist=dist)
+    X_ = model.asm(dataset_processor, X_test_filtered[im_id], 15, 10, dist=dist)
+    # X_, b, Xt, Yt, s, theta = model.asm_algo(dataset_processor, X_test_filtered[im_id], 15, 10, dist=dist)
 
     # Before fitting :
-    X = (model.mean_ + model.deformable_model @ model.P).reshape((-1, 2))
+    X = model.mean_.reshape((-1, 2))
     display_lm(X_test_filtered[im_id], X, Y_test[im_id], legend=True)
 
     # After fitting :
+    after_mean_ = model.mean_
     display_lm(X_test_filtered[im_id], X_, Y_test[im_id], legend=True)
+
+
+    # Let's play with the shapes
+    mode = 6 # mode 3 nez bouche mode 4 ouverture bouche mode 5 yeux
+    lms, variations = model.create_mode_map(mode, 9)
+    draw_mode_variation(np.zeros_like(X_train[0]), lms, variations, mode=mode)
+    draw_mode_variation_single_plot(np.zeros_like(X_train[0]), lms, variations, mode=mode)
