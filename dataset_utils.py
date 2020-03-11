@@ -61,19 +61,23 @@ class DatasetUtils:
 
     def get_neighbourhood(self, img, x, y, k):
         out = np.zeros((2*k+1, 2*k+1))
-        ngh = img[max(0, y - k):min(y + k + 1, self.W), max(0, x - k):min(x + k + 1, self.H)] # Carefull, x is horizontla, y vertical
-        out[-min(0, y-k): 2*k+1 - max(0, y+k+1 -self.W), -min(0, x-k):2*k+1 - max(0, x+k+1-self.H)] = ngh
+        ngh = img[max(0, y - k):max(0, min(y + k + 1, self.W)), max(0, x - k):max(0, min(x + k + 1, self.H))] # Carefull, x is horizontla, y vertical
+        out[-min(0, y-k): max(0, 2*k+1 - max(0, y+k+1 -self.W)), -min(0, x-k):max(0, 2*k+1 - max(0, x+k+1-self.H))] = ngh
         return out
 
     def create_point_stat_model(self, points, k, images, descriptor=None):
 
         point_model = []
         for index, img in enumerate(images):
+            if index == 111: # Remove 111 index in iBug.
+                continue
             x, y = points[index]
             g = self.get_neighbourhood(img, int(x), int(y), k)
             if descriptor == "sift":
                 g = self.SD.describe(g)
             else:
+                if np.linalg.norm(g) == 0:
+                    continue
                 g = g/np.linalg.norm(g)
                 g = g.reshape((-1, ))
             point_model.append(g)
@@ -133,13 +137,18 @@ def plot_unique_landmark(img, lm, ids, names):
 
 
 def plot_point_stat_model(stat_model, ids, names):
-    fig = plt.figure()
+    fig = plt.figure(figsize=(10, 10))
 
     for i, (name, id) in enumerate(zip(names, ids)):
         plt.subplot(2, 2, i+1)
         mean, _ = stat_model[id]
         plt.imshow(mean.reshape((2*k+1, 2*k+1)), cmap="gray")
-        plt.title(f"{name}")
+        plt.title(f"{name}", size="xx-large")
+        plt.xticks([])
+        plt.yticks([])
+
+    plt.subplots_adjust(wspace=0.025, hspace=0.1)
+    plt.savefig("fig/none_local.png",  bbox_inches='tight')
     plt.show()
     return fig
 
@@ -151,7 +160,7 @@ def check_sample_around_point(img, lm, id, name, samples, model, random=False, s
     # plt.imshow(img, cmap="gray")
     # plt.scatter([x], [y])
     reshape_size = int(np.sqrt(model.sm_means[id].shape[0]))
-    plt.imshow(model.sm_means[id].reshape((reshape_size, reshape_size)), cmap="gray")
+    plt.imshow(model.sm_means[id][:121].reshape((reshape_size, reshape_size)), cmap="gray")
     plt.title(f"{name}")
     if random: np.random.shuffle(samples)
     dist_fn = model.mahalanobis_dist if dist == "mah" else model.euclidean_distance
@@ -172,19 +181,27 @@ if __name__ == "__main__":
 
     import os
     from dataset import KaggleDataset, iBug300WDataset
-    dataset_name = "300W" #"Kaggle"
+    dataset_name = "Kaggle"
+    path = os.path.join("data", dataset_name)
+    # dataset = KaggleDataset(path) #KaggleDataset(path) #
+    dataset_name = "300W"
     path = os.path.join("data", dataset_name, "01_Indoor")
-    dataset = iBug300WDataset(path)#KaggleDataset(path)
-    X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load_cropped()
+    dataset = iBug300WDataset(path)
 
+    X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load() # For kaglle
+    X_train, X_val, X_test, Y_train, Y_val, Y_test = dataset.load_cropped_resized()
+
+    k, strategy, descriptor = 12, None, "sift"
     dataset_util = KaggleDatasetUtils(X_train, Y_train)
-    k, strategy = 10, "Laplacian"
-    stat_model = dataset_util.create_lm_stat_model(k, strategy=strategy)
+    # stat_model = dataset_util.create_lm_stat_model(k, strategy=strategy)
 
     iBug_utils = iBug300DatasetUtils(X_train, Y_train)
+    stat_model = iBug_utils.create_lm_stat_model(k, strategy=strategy, descriptor=descriptor)
+
+    dataset_util = iBug_utils if iBug_utils is not None else dataset_util
 
     # Display stat models for different points :
-    left_eye_corner_index, bottom_mouth_tip_index, nose_index, center_right_eye_index = 3, 13, 10, 1
+    left_eye_corner_index, bottom_mouth_tip_index, nose_index, center_right_eye_index = 10, 20, 30, 40
     ids = [left_eye_corner_index, bottom_mouth_tip_index, nose_index, center_right_eye_index]
     names = ["left_eye_corner", "bottom_mouth_tip", "nose", "right_center_eye"]
 
@@ -198,8 +215,11 @@ if __name__ == "__main__":
     sm_means, sm_inv_covs = dataset_util.format_stat_model(stat_model)
     model.sm_means, model.sm_inv_covs = sm_means, sm_inv_covs
     X_transformed = dataset_util.transform_img_with_respect_to_strat(X_train, strategy=strategy)
-    samples = dataset_util.sample_around_point(X_transformed[0], int(Y_train[0][ids[0]][0]), int(Y_train[0][ids[0]][1]), 15)
-    check_sample_around_point(X_train[0], Y_train[0], ids[0], names[0], samples, model, random=True, sorted_=False, dist="mah")
+    samples = dataset_util.sample_around_point(X_transformed[0], int(Y_train[0][ids[2]][0]), int(Y_train[0][ids[2]][1]), 15)
+    if descriptor is not None:
+        samples_ = model.sift_transform(samples, patch_size=25)
+        samples = [s[-1] for s in samples_]
+    check_sample_around_point(X_train[0], Y_train[0], ids[2], names[2], samples, model, random=False, sorted_=True, dist="mse")
 
     print('.')
 

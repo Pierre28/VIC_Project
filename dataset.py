@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import pandas as pd
 
+from shape_aligner import Shape, Point
+
 np.random.seed(0)
 
 class Dataset:
@@ -28,7 +30,6 @@ class Dataset:
             lines = f.readlines()
             indices = [[int(x) for x in line.rstrip().split(":")[1].split(",")] for line in lines]
             return indices
-
 
 class iBug300WDataset(Dataset):
     """
