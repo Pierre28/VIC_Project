@@ -6,11 +6,12 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import pandas as pd
 
-from shape_aligner import Shape, Point
-
 np.random.seed(0)
 
 class Dataset:
+    """
+    Base class for the dataset. Used to load the data and perform basic preprocessings.
+    """
 
     def __init__(self, path, img_extension):
         self.path = path
@@ -33,7 +34,7 @@ class Dataset:
 
 class iBug300WDataset(Dataset):
     """
-    https://ibug.doc.ic.ac.uk/download/300VW_Dataset_2015_12_14.zip/
+    Download from : https://ibug.doc.ic.ac.uk/download/300VW_Dataset_2015_12_14.zip/
     """
     def __init__(self, path, img_extension="png"):
         super().__init__(path, img_extension)
@@ -66,6 +67,10 @@ class iBug300WDataset(Dataset):
 
 
     def _retrieve_index(self):
+        """
+        Loop into the data folder and collect frames filenames. Store it to self.indexes
+        :return:
+        """
         self.indexes = []
         for file_name in os.listdir(self.path):
             name_match = re.match("([a-zA-Z0-9\_]+).{}".format(self.img_extension), file_name)
@@ -74,19 +79,29 @@ class iBug300WDataset(Dataset):
 
     def load_image(self, index:str, convert_color=False) -> np.array:
         """
+        Single image loader.
         Note : cv2 use BRG convention. To switch de RGB, use cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         """
         _img = cv2.imread(os.path.join(self.path, index + "." + self.img_extension))
         if convert_color: _img = cv2.cvtColor(_img, cv2.COLOR_BGR2RGB)
         return _img
 
-    def load_images(self):
+    def load_images(self) -> np.array:
+        """
+        Load all images contained in data path.
+        """
         images = []
         for index in self.indexes:
             images.append(self.load_image(index, convert_color=True))
         return np.array(images)
 
     def load(self, train_test_split=True):
+        """
+        Load all images an landmarks.
+        :param train_test_split:bool If True, will split according to train-val-test split compute before loading.
+        Must create this split using self.create_train_test_split, or place the file indexes.txt at the root of the data folder for consistent results
+        :return: Tuple (X, Y), X:np.array, frames - Y:np.array, landmarks
+        """
         X, Y = self.load_images(), self.load_landmarks()
         if train_test_split:
             train_indices, val_indices, test_indices = self.read_test_train_split()
@@ -99,6 +114,12 @@ class iBug300WDataset(Dataset):
 
 
     def load_cropped(self, offset=15, train_test_split=True):
+        """
+        Load all images and landmarks, cropping the images around the landmark
+        :param offset: space between extreme landmark points and cropped region
+        :param train_test_split: see self.load()
+        :return: X:images, Y:landmarks
+        """
         images = []
         landmarks = []
         for index in self.indexes:
@@ -119,17 +140,31 @@ class iBug300WDataset(Dataset):
 
     @staticmethod
     def resize(img, size):
+        """
+        Utils function to resize images
+        """
         img_ = cv2.resize(img, dsize=size)
         return img_
 
     @staticmethod
     def rescale_lm(lm, xscale, yscale):
+        """
+        Util function to rescale landmarks
+        :param lm: np.array
+        :param xscale: int
+        :param yscale: int
+        :return: np.array, rescaled landmark
+        """
         lm_ = np.zeros_like(lm)
         for i, (x, y) in enumerate(lm):
             lm_[i] = [x*yscale, y*xscale]
         return lm_
 
     def rescale_set(self, im_set, lm_set, size):
+        """
+        Rescale both images and landmarks to a given size
+        :return: [X:rescaled images, Y:rescaled landmarks]
+        """
         out_im, out_lm = [] , []
         for im, lm in zip(im_set, lm_set):
             try :
@@ -144,6 +179,10 @@ class iBug300WDataset(Dataset):
         return [np.array(out_im), np.array(out_lm)]
 
     def load_cropped_resized(self, offset=15, size=(128, 128), train_test_split=True):
+        """
+        Load data, cropping and resize. See self.load() for further doc
+
+        """
         if train_test_split:
             X_train, X_val, X_test, Y_train, Y_val, Y_test = self.load_cropped(offset=offset)
             rescale_im_sets, rescale_lm_sets = [], []
@@ -163,6 +202,9 @@ class iBug300WDataset(Dataset):
 
 
     def load_landmark(self, index: str) -> np.array:
+        """
+        Load a single landmark
+        """
         with open(os.path.join(self.path, index + '.pts'), "r") as f:
             lines = f.readlines()
             _version = re.match("version: ([0-9]+)\n$", lines[0]).group(1)
@@ -173,13 +215,19 @@ class iBug300WDataset(Dataset):
                 _points.append([float(match.group(1)), float(match.group(2))])
         return np.array(_points)
 
-    def load_landmarks(self):
+    def load_landmarks(self) -> np.array:
+        """
+        Load all landmarks in data folder
+        """
         landmarks = []
         for index in self.indexes:
             landmarks.append(self.load_landmark(index))
         return np.array(landmarks)
 
     def create_train_test_split(self):
+        """
+        Create train - val - test split indexes. Recommended using the indexes provided for results consistency.
+        """
         # Get number of indexes
         indices = np.arange(self.len)
         np.random.shuffle(indices)
@@ -193,7 +241,10 @@ class iBug300WDataset(Dataset):
             f.write(out_str)
 
     @staticmethod
-    def matplotlib_visualize_landmark(img, landmark, size=5, is_rgb=True):
+    def matplotlib_visualize_landmark(img:np.array, landmark:np.array, is_rgb=True):
+        """
+        Draw landmark onto image
+        """
         if not is_rgb: img_ = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         else: img_ = np.copy(img)
 
@@ -203,12 +254,19 @@ class iBug300WDataset(Dataset):
         return fig
 
     @staticmethod
-    def create_bbox(landmark):
+    def create_bbox(landmark:np.array) -> tuple:
+        """
+        Create bbox out of landmark.
+        :return: (xmin, ymin, xmax, ymax). Respectively left side, top, right, bottom
+        """
         (xmin, ymin), (xmax, ymax) = np.min(landmark, axis=0), np.max(landmark, axis=0)
         return (xmin, ymin, xmax, ymax)
 
     @staticmethod
-    def matplotlib_visualize_bbox(img, bbox, is_rgb=True):
+    def matplotlib_visualize_bbox(img:np.array, bbox:tuple, is_rgb=True):
+        """
+        Draw bbox onto image
+        """
         if not is_rgb: img_ = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         else: img_ = np.copy(img)
         fig, ax = plt.subplots(1)
@@ -219,7 +277,11 @@ class iBug300WDataset(Dataset):
         return fig
 
     @staticmethod
-    def crop_w_bbox(img, bbox, offset):
+    def crop_w_bbox(img:np.array, bbox:tuple, offset:int) -> np.array:
+        """
+        Crop an image based on a bbox and offset (space between bbox and cropped region)
+        :return: Cropped image
+        """
         im = img.copy()
         xmin, ymin, xmax, ymax = bbox
         return im[int(np.floor(ymin-offset)):int(np.ceil(ymax+offset)), int(np.floor(xmin-offset)):int(np.ceil(xmax+offset))]
@@ -237,6 +299,11 @@ class KaggleDataset(Dataset):
         super().__init__(path, img_extension)
 
     def load_landmarks(self, min_index=0, max_index=10000, mask_missing_points=False):
+        """
+        Load all landmarks in dataset.
+        Specify min_index - max_index to load a specific subset
+        mask_missing_points: True to remove frames without all landmark points
+        """
         df = pd.read_csv(os.path.join(self.path, "facial_keypoints.csv"))
         cols = df.columns
         lm = df[min_index:max_index].apply(lambda row: np.array([[row[x], row[y]] for x, y in zip(cols[::2], cols[1::2])]), axis=1).to_numpy()
@@ -246,10 +313,17 @@ class KaggleDataset(Dataset):
         return lm
 
     def load_images(self, min_index=0, max_index=10000):
+        """
+        Load all images
+        Specify min_index - max_index to load a specific subset
+        """
         img = np.load(os.path.join(self.path, "face_images.npz"))['face_images'][:, :, min_index:max_index]
         return img
 
     def load(self, min_index=0, max_index=10000, mask_missing_points=True, train_test_split=True):
+        """
+        Load all images and landmarks
+        """
         if mask_missing_points:
             Y, mask = self.load_landmarks(min_index, max_index, mask_missing_points)
             X =  self.load_images(min_index, max_index)[:, :, mask[min_index:max_index]]
@@ -270,7 +344,9 @@ class KaggleDataset(Dataset):
             return X, Y
 
     def create_train_test_split(self):
-        # Get number of indexes
+        """
+        Create train - val - test split indexes. Recommended using the indexes provided for results consistency.
+        """
         _, mask = self.load_landmarks(mask_missing_points=True)
         len_ = sum(mask)
         indices = np.arange(len_)
@@ -286,6 +362,9 @@ class KaggleDataset(Dataset):
 
     @staticmethod
     def matplotlib_visualize_landmark(img, landmark):
+        """
+        Visualize landmarks on image
+        """
         img_ = np.copy(img)
 
         fig, ax = plt.subplots(1)
@@ -295,6 +374,9 @@ class KaggleDataset(Dataset):
 
     @staticmethod
     def matplotlib_visualize_landmarks(img, landmarks, lm_names):
+        """
+        Visualize multiple landmarks on single image
+        """
         img_ = np.copy(img)
         fig, ax = plt.subplots(1)
         ax.imshow(img_, cmap="gray")

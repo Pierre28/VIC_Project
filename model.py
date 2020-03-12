@@ -2,29 +2,39 @@ from sklearn.decomposition import PCA
 import numpy as np
 from utils import pointwise_euclidean_distance
 from numpy_sift import SIFTDescriptor
-from shape_aligner import Shape, Point
+from shape_aligner import Shape
 
 
 class BaseDetector:
+    """
+    Base class for landmark model detector
+    """
 
     def __init__(self):
         pass
 
     def fit(self, X, Y):
+        """
+        Fitting the model to the training data
+        """
         pass
 
     def predict(self, X):
-        pass
-
-    def load(self):
-        pass
-
-    def save(self):
+        """
+        Predict a set of landmark points onto a new image X
+        """
         pass
 
 class ASM(BaseDetector):
+    """
+    Active Shape Model implementation : https://www.face-rec.org/algorithms/AAM/app_models.pdf
+    """
+
 
     def __init__(self, modes=20):
+        """
+        :param modes: Number of eigenvectors to retain
+        """
         super(ASM, self).__init__()
         self.deformable_model = None
         self.modes = modes
@@ -36,10 +46,15 @@ class ASM(BaseDetector):
 
 
     def fit(self, X, Y):
-
         self.build_model(Y, pca_components=self.modes)
 
     def build_model(self, Y, pca_components=None):
+        """
+        Align dataset to a common co-ordinate frame using Procrustes Analysis. Then perform PCA.
+        :param Y: Set of landmarks
+        :param pca_components: Number of egeinvectors to retain
+        :return:
+        """
         self.shapes = [Shape.from_vector(y) for y in Y]
         self.w = self.compute_weight_matrix(Y)
         self.aligned_shapes = self.__procrustes(self.shapes)
@@ -57,7 +72,10 @@ class ASM(BaseDetector):
         else:
             raise NotImplementedError
 
-    def get_mean_shape(self, shapes):
+    def get_mean_shape(self, shapes:list) -> list:
+        """
+        Util function to get the mean of shapes
+        """
         s = shapes[0]
         for shape in shapes[1:]:
             s = s + shape
@@ -102,15 +120,17 @@ class ASM(BaseDetector):
         return shapes
 
     @staticmethod
-    def mean_shape(shapes):
+    def mean_shape(shapes:np.array) -> np.array:
+        """
+        Util function to get mean of a shape
+        """
         mean_ = np.mean(shapes, axis=0)
         return mean_
 
     @staticmethod
     def compute_weight_matrix(shapes):
         """
-        :param shapes:
-        :return: weight
+        Compute the weight matrix of shapes used in Procrustes Analysis
         """
         assert shapes.ndim == 3, "Must not be flatten first"
         num_img, num_pts, _ = shapes.shape
@@ -134,6 +154,9 @@ class ASM(BaseDetector):
         return inv_weight
 
     def generate_lm(self, mode=0, scale=10):
+        """
+        Generate landmark by varying a given mode
+        """
         assert self.deformable_model is not None, "You must build the model first"
         limit = np.sqrt(3)*np.sqrt(self.dm_vp)[mode]/scale
         dm = self.deformable_model.copy()
@@ -143,6 +166,9 @@ class ASM(BaseDetector):
         return lm.reshape((-1, 2))
 
     def create_mode_map(self, mode=0, n=5):
+        """
+        Create a map of a mode by varying its value onto the whole plausible range
+        """
         assert self.deformable_model is not None, "You must build the model first"
         limit = np.sqrt(3)*np.sqrt(self.dm_vp)[mode]
         variations = np.linspace(-limit, +limit, n)
@@ -155,21 +181,26 @@ class ASM(BaseDetector):
         return lms, variations
 
     def mahalanobis_dist(self, g, i):
+        """
+        Utils function implementing the Mahalanobis distance
+        """
         assert g.ndim == 1, "Must flatten neighbourhood before computing distance"
         dist = (g - self.sm_means[i]).T @ self.sm_inv_covs[i] @ (g - self.sm_means[i])
         return dist
 
     def euclidean_distance(self, g, i):
+        """
+        Utils function implementing the Euclidean distance
+        """
         dist = (g - self.sm_means[i]).T @ np.eye(self.sm_inv_covs[i].shape[0]) @ (g - self.sm_means[i])
         return dist
 
 
-    def fit_fn(self):
-        pass
-
     def predict(self, X):
+        """
+        Generate landmark for image X using mean shape model
+        """
         lm = self.generate_lm()
-        # TODO: iteratively update fit function
         return np.array([lm for _ in X])
 
     @staticmethod
@@ -201,44 +232,19 @@ class ASM(BaseDetector):
         x = (Y - t)/s @ R
         return x
 
-    @staticmethod
-    def get_pose_parameters(x, y): # TODO : complete
-        assert x.ndim == 2, "Reshape to landmark (n_lm, 2) before transforming"
-        assert y.ndim == 2, "Reshape to landmark (n_lm, 2) before transforming"
-        """
-        Compute best matching pose parameters matching model x to target points y
-        :return tuple : (Xt, Yt, s, theta)
-        """
-        return 0, 0, 1, 0
-
-    def match_model_to_target_points(self, Y, max_it=10, eps=1e-3): # Protocol 1, page 9 (https://pdfs.semanticscholar.org/ebc2/ceba03a0f561dd2ab27c97b641c649c48a14.pdf)
-        # Initialize model
-        b = np.zeros((self.modes,))
-        Xt, Yt, s, theta = None, None, None, None
-        # Main loop
-        converge, it = False, 0
-        while not converge and it < max_it:
-            it += 1
-            x = self.mean_ + b @ self.P
-            x_reshaped, Y_reshaped = x.reshape((-1, 2)), Y.reshape((-1, 2))
-            Xt, Yt, s, theta = self.get_pose_parameters(x_reshaped, Y_reshaped)
-            y = self.T_inv(Xt, Yt, s, theta, Y_reshaped) # Project Y into the model co-ordinate frame
-            y = y.reshape((-1,))
-            y = y / (y @ self.mean_) # Project y into the tangent plane to x ̄ by scaling #TODO : Seems unappropriate.
-            b_ = self.P @ (y - self.mean_) # Update the model parameters to match to y′
-            b_ = self.apply_constraints(b_) # Apply constraints on b
-            if np.abs(b - b_).sum() < eps:
-                converge=True
-            b = b_.copy()
-        return b, Xt, Yt, s, theta, converge, it
-
     def apply_constraints(self, b):
+        """
+        Apply constraint on shape vector
+        """
         limits = 3* np.sqrt(self.dm_vp)
         b = np.clip(b, -limits, limits)
         return b
 
     @staticmethod
     def sift_transform(patches, patch_size):
+        """
+        Util function to compute SIFT descriptor on patch
+        """
         SD = SIFTDescriptor(patchSize = patch_size)
         out = []
         for x, y, patch in patches:
@@ -247,36 +253,24 @@ class ASM(BaseDetector):
         return out
 
     def iteration(self, dataset_processor, X, img, m, dist, descriptor, patch_size):
+        """
+        Perform a single iteration of the ASM algorithm. Specifically:
+        1. Initiate
+        2. Find best candidate around current shape
+        3. Find best parameters to align to the new shape
+        4. Project back to image space
+        :param dataset_processor: instance of DatasetUtils
+        :param X: np.array, landmark prior to iteration
+        :param img: np.array, image to fit landmark to
+        :param m: search range around each point. Search will be performed on m-k, where k is the descriptor size
+        :param dist: Fit function
+        :param descriptor: "sift" or None
+        :param patch_size: Patch size used for the descriptor
+        :return:
+        """
+
+        # Initiate
         X_ = np.zeros_like(X)
-
-        dist_fn = self.euclidean_distance if dist == "mse" else self.mahalanobis_dist
-
-        # Find best candidate around current shape
-        for i, (x, y) in enumerate(X):
-            candidates = dataset_processor.sample_around_point(img, x, y, m)
-            if descriptor=="sift": candidates = self.sift_transform(candidates, patch_size=patch_size)
-            u_, v_, min_dist = None, None, np.inf
-            for u, v, candidate in candidates:
-                dist = dist_fn(candidate.reshape((-1,)), i)
-                if dist < min_dist:
-                    min_dist = dist
-                    u_, v_ = u, v
-            X_[i] = [u_, v_]
-
-        # Align to X_
-        # b = self.P @ X_.reshape((-1, ))
-        # b_ = self.apply_constraints(b)
-        # new_shape = b_ @ self.P
-        diff = X_.reshape((-1, )) - self.mean_
-        new_shape = self.mean_.copy()
-        b = self.P @ diff
-        b_ = self.apply_constraints(b)
-        new_shape += b_ @ self.P
-        return new_shape.reshape((-1, 2))
-
-    def iteration_new(self, dataset_processor, X, img, m, dist, descriptor, patch_size):
-        X_ = np.zeros_like(X)
-
         dist_fn = self.euclidean_distance if dist == "mse" else self.mahalanobis_dist
 
         # Find best candidate around current shape
@@ -292,97 +286,52 @@ class ASM(BaseDetector):
             X_[i] = [u_, v_]
 
         old_s = Shape.from_vector(X_)
-        # Align
-        new_s = old_s.align_to_shape(Shape.from_vector(self.mean_), self.w)
 
+        # Align & update params - Navigating form Image space - Image co-ordinate - Model space
+        new_s = old_s.align_to_shape(Shape.from_vector(self.mean_), self.w)
         diff = new_s.get_vector() - self.mean_
         new_shape_vector = self.mean_.copy()
         b = self.P @ diff
         b_ = self.apply_constraints(b)
-
         new_shape_vector += b_ @ self.P
         new_shape_aligned = Shape.from_vector(new_shape_vector).align_to_shape(old_s, self.w)
-
         new_shape_vector_aligned = new_shape_aligned.get_vector()
 
         return new_shape_vector_aligned.reshape((-1, 2))
-        # display_lm(img, new_shape_vector_aligned.reshape((-1, 2)))
-        # display_lm(img, new_s.get_vector().reshape((-1, 2)))
-        # display_lm(img, new_shape_vector.reshape((-1, 2)))
-        # display_lm(img, X)
-        # display_lm(img, X_)
 
-    def asm(self, dataset_processor, img, m, max_it=10, eps=1, dist="mah", descriptor="sift", patch_size=15):
 
+    def asm(self, dataset_processor, img, m, max_it=10, eps=1, dist="mah", descriptor="sift", patch_size=15, return_hist=None):
+        """
+        Perform Active Shape Model on image to fit a landmark. Iterativily calls iteration, while update stays above a given
+        threshold
+        :param dataset_processor:  instance of DatasetUtils
+        :param img:  np.array, image to fit landmark to
+        :param m: search range around each point. Search will be performed on m-k, where k is the descriptor size
+        :param max_it: maximum number of iteration to perform. ASM classicaly converges in a few epochs
+        :param eps: threshold to assert convergence
+        :param dist: fit function
+        :param descriptor: "sift" or None
+        :param patch_size: Patch size of the descriptor
+        :param return_hist: Bool, whether to store each iteration solution or not
+        :return: fitted landmark
+        """
         X = self.mean_.copy().reshape((-1, 2))
+        if return_hist: lm_hist = [X]
         converge, it = False, 0
         while not converge and it < max_it:
             it += 1
-            X_ = self.iteration_new(dataset_processor, X, img, m, dist=dist,  descriptor=descriptor, patch_size=patch_size)
+            X_ = self.iteration(dataset_processor, X, img, m, dist=dist,  descriptor=descriptor, patch_size=patch_size)
             if np.linalg.norm(X - X_) < eps:
                 converge = True
             X = X_
+            if return_hist: lm_hist.append(X)
 
+        if return_hist: return X, lm_hist
         return X
 
-    def asm_algo(self, dataset_processor, img, m, max_it=10, eps=1, dist="mah"):
-
-        X  = (self.mean_ + self.deformable_model @ self.P).reshape((-1, 2))
-        X_ = np.zeros_like(X)
-
-        dist_fn = self.euclidean_distance if dist == "mse" else self.mahalanobis_dist
-        converge, it = False, 0
-        while not converge and it < max_it:
-            it += 1
-            for i, (x, y) in enumerate(X):
-                candidates = dataset_processor.sample_around_point(img, x, y, m)
-                u_, v_, min_dist = None, None, np.inf
-                for u, v, candidate in candidates:
-                    dist = dist_fn(candidate.reshape((-1,)), i)
-                    if dist < min_dist:
-                        min_dist = dist
-                        u_, v_ = u, v
-                X_[i] = [u_, v_]
-            b, Xt, Yt, s, theta, *_ = self.match_model_to_target_points(X_)
-
-            # Generate b
-            x = b @ self.P  # + self.mean_
-            X_ = self.T(Xt, Yt, s, theta, x.reshape((-1, 2)))
-
-            if np.linalg.norm(X - X_) < eps:
-                converge = True
-            X = X_.copy()
-
-        return X, b, Xt, Yt, s, theta
-
-
-def test_T_fn(model):
-    def T_T_inv_test(model):
-        x = model.generate_lm()
-        Y = model.T(1, 1, 2, np.pi / 2, x)
-        X = model.T_inv(1, 1, 2, np.pi / 2, Y)
-        return ~np.any(X-x)
-
-    def T_id(model):
-        x = model.generate_lm()
-        y = model.T(0, 0, 1, 0, x)
-        return ~np.any(y - x)
-
-    def Tinv_id(model):
-        x = model.generate_lm()
-        y = model.T_inv(0, 0, 1, 0, x)
-        return ~np.any(y - x)
-
-    assert T_T_inv_test(model)
-    assert T_id(model)
-    assert Tinv_id(model)
-
-def test_matching_model(model):
-    b, Xt, Yt, s, theta, cv, it = model.match_model_to_target_points(model.mean_)
-    # assert it==1, "Inputing normalized mean_ of model should return a null shape"
-    return
-
 if __name__ == "__main__":
+
+    # Used to debug
 
     import os
     # from dataset import KaggleDataset
@@ -396,8 +345,6 @@ if __name__ == "__main__":
     model = ASM()
     model.fit(X_train, Y_train)
 
-    test_T_fn(model)
-    test_matching_model(model)
 
     from dataset_utils import KaggleDatasetUtils
     dataset_processor = KaggleDatasetUtils(X_train, Y_train)
@@ -409,44 +356,6 @@ if __name__ == "__main__":
 
     # img, lm = X_test[3], Y_test[3]
     import matplotlib.pyplot as plt
-    def display_lm(img, lm, lm_gt=None, legend=False):
-        plt.imshow(img, cmap="gray")
-        plt.scatter(lm[:, 0], lm[:,1], c="r", label="pred")
-        if lm_gt is not None :
-            plt.scatter(lm_gt[:, 0], lm_gt[:, 1], c="g", label="gt")
-            plt.title("PED : {}".format(pointwise_euclidean_distance(lm, lm_gt)))
-        if legend: plt.legend()
-        plt.show()
-
-    def display_candidate(cand):
-        plt.imshow(cand, cmap="gray")
-        plt.show()
-
-    def draw_mode_variation(img, lms, variations, mode):
-        fig = plt.figure()
-        n = int(np.sqrt(len(lms)))
-        for i, (lm, var) in enumerate(zip(lms[:n**2], variations[:n**2])):
-            plt.subplot(n, n, i+1)
-            plt.imshow(img)
-            plt.scatter(lm[:, 0], lm[:, 1])
-            plt.title("{:.1f}".format(var))
-        plt.title("Mode : {}".format(mode))
-        plt.show()
-        return fig
-
-
-    def draw_mode_variation_single_plot(img, lms, variations, mode):
-        fig = plt.figure()
-        n = int(np.sqrt(len(lms)))
-        plt.subplot(1, 1, 1)
-        plt.imshow(img, cmap="gray")
-        for i, (lm, var) in enumerate(zip(lms[:n ** 2], variations[:n ** 2])):
-            plt.scatter(lm[:, 0], lm[:, 1], label="{:.1f}".format(var))
-        plt.legend()
-        plt.title("Mode : {}".format(mode))
-        plt.show()
-        return fig
-
 
     im_id = 10
     before_mean_ = model.mean_
@@ -454,6 +363,7 @@ if __name__ == "__main__":
     X_ = model.asm(dataset_processor, X_test_filtered[im_id], 15, 10, dist=dist)
     # X_, b, Xt, Yt, s, theta = model.asm_algo(dataset_processor, X_test_filtered[im_id], 15, 10, dist=dist)
 
+    from visualizer import display_lm, draw_mode_variation_single_plot, draw_mode_variation
     # Before fitting :
     X = model.mean_.reshape((-1, 2))
     display_lm(X_test_filtered[im_id], X, Y_test[im_id], legend=True)
@@ -468,3 +378,6 @@ if __name__ == "__main__":
     lms, variations = model.create_mode_map(mode, 9)
     draw_mode_variation(np.zeros_like(X_train[0]), lms, variations, mode=mode)
     draw_mode_variation_single_plot(np.zeros_like(X_train[0]), lms, variations, mode=mode)
+
+    for i in range(20):
+        display_lm(X_val[i], Y_val[i])

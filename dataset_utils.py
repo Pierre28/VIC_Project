@@ -3,6 +3,11 @@ import cv2
 from numpy_sift import SIFTDescriptor
 
 class DatasetUtils:
+    """
+    Base class defining functions used by models to apply to the dataset
+    Mostly preprocessing - building statistical models of landmark points -
+    Sampling neighborhood around points
+    """
 
     def __init__(self, dataset_name, X, Y):
         self.dataset_name = dataset_name
@@ -11,6 +16,13 @@ class DatasetUtils:
         self.H, self.W, *_ = self.X[0].shape
 
     def create_lm_stat_model(self, k, strategy=None, descriptor = None):
+        """
+        Create a statistical model of a landmark.
+        :param k: Size of the descriptor. Extracted patches will be of shape (2*k+1, 2*k+1)
+        :param strategy: Filter to apply to the image prior to descriptor computation
+        :param descriptor: Wether to use SIFT or not
+        :return: stat model : list of tuples (mean, cov) for each landmark point
+        """
         self.SD = SIFTDescriptor(patchSize=2*k+1)
         self.k = k
         X = self.transform_img_with_respect_to_strat(self.X, strategy)
@@ -19,11 +31,21 @@ class DatasetUtils:
             stat_model.append(self.create_point_stat_model(points=self.Y[:, i, :], k=k, images=X, descriptor=descriptor))
         return stat_model
 
-    def transform_img_with_respect_to_strat(self, data, strategy):
+    def transform_img_with_respect_to_strat(self, data:np.array, strategy:str):
+        """
+        Apply filter any transformation to the data before processing
+        :param data: np.array, image of list of images
+        :param strategy: Name of strategy to be applied
+        :return: transformed array
+        """
         pass
 
     @staticmethod
-    def apply_filter(images: np.array, strategy):
+    def apply_filter(images: np.array, strategy:str):
+        """
+        Util function to apply the desired filter.
+        :return: a list of arrays
+        """
         if strategy == "Laplacian":
             filter_fn = lambda x: cv2.Laplacian(x, cv2.CV_64F)
         elif strategy == "all_dir":
@@ -60,12 +82,19 @@ class DatasetUtils:
         return candidates
 
     def get_neighbourhood(self, img, x, y, k):
+        """
+        Extract neighborhood around point of shape (2*k+1, 2*k+1)
+        """
         out = np.zeros((2*k+1, 2*k+1))
         ngh = img[max(0, y - k):max(0, min(y + k + 1, self.W)), max(0, x - k):max(0, min(x + k + 1, self.H))] # Carefull, x is horizontla, y vertical
         out[-min(0, y-k): max(0, 2*k+1 - max(0, y+k+1 -self.W)), -min(0, x-k):max(0, 2*k+1 - max(0, x+k+1-self.H))] = ngh
         return out
 
     def create_point_stat_model(self, points, k, images, descriptor=None):
+        """
+        Create a statistical model for a single point. Extract neighborhood and compute descriptor over all
+         training samples, get its mean and covariance matrix
+        """
 
         point_model = []
         for index, img in enumerate(images):
@@ -124,41 +153,29 @@ class KaggleDatasetUtils(DatasetUtils):
             X = self.apply_filter(data, strategy)
         return X
 
-def plot_unique_landmark(img, lm, ids, names):
-    fig = plt.figure()
-    for i, (name, id) in enumerate(zip(names, ids)):
-        plt.subplot(2, 2, i+1)
-        x, y = lm[id]
-        plt.imshow(img, cmap="gray")
-        plt.scatter([x], [y])
-        plt.title(f"{name}")
-    plt.show()
-    return fig
 
-
-def plot_point_stat_model(stat_model, ids, names):
-    fig = plt.figure(figsize=(10, 10))
-
-    for i, (name, id) in enumerate(zip(names, ids)):
-        plt.subplot(2, 2, i+1)
-        mean, _ = stat_model[id]
-        plt.imshow(mean.reshape((2*k+1, 2*k+1)), cmap="gray")
-        plt.title(f"{name}", size="xx-large")
-        plt.xticks([])
-        plt.yticks([])
-
-    plt.subplots_adjust(wspace=0.025, hspace=0.1)
-    plt.savefig("fig/none_local.png",  bbox_inches='tight')
-    plt.show()
-    return fig
 
 
 def check_sample_around_point(img, lm, id, name, samples, model, random=False, sorted_=False, dist="mah"):
+    """
+    Function used to debug - Check values of fit function of a given descriptor extracted around keypoint
+    :param img: Image array
+    :param lm: Landmark
+    :param id: Id of the landmark point to consider
+    :param name: Name of the corresponding point
+    :param samples: Samples around point. Created using DatasetUtils.sample_around_point
+    :param model: Model to extract the stat model from
+    :param random: Wether to draw randomly from all samples
+    :param sorted_: Wehter to sort samples according to fit function
+    :param dist: Fit function to use
+    :return:
+    """
+
     fig = plt.figure()
     plt.subplot(3, 3, 1)
     x, y = lm[id]
-    # plt.imshow(img, cmap="gray")
-    # plt.scatter([x], [y])
+    plt.imshow(img, cmap="gray")
+    plt.scatter([x], [y])
     reshape_size = int(np.sqrt(model.sm_means[id].shape[0]))
     plt.imshow(model.sm_means[id][:121].reshape((reshape_size, reshape_size)), cmap="gray")
     plt.title(f"{name}")
@@ -206,6 +223,7 @@ if __name__ == "__main__":
     names = ["left_eye_corner", "bottom_mouth_tip", "nose", "right_center_eye"]
 
     import matplotlib.pyplot as plt
+    from visualizer import plot_point_stat_model, plot_unique_landmark
     plot_unique_landmark(X_train[0], Y_train[0], ids, names)
     plot_point_stat_model(stat_model, ids, names)
 
