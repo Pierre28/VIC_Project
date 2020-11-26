@@ -34,3 +34,5 @@ python main.py --dataset Kaggle
 ```
 python main.py --dataset 300W
 ```
+
+Our paper can be found [here](https://github.com/Pierre28/VIC_Project/blob/master/VIC_Final_Project_Report.pdf)
